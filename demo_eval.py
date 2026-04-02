@@ -46,7 +46,8 @@ if cuda:
     criterion_pixelwise.cuda()
 
 # Load pretrained models
-LUTs = torch.load("%s/LUTs.pth" % opt.model_dir)
+map_loc = torch.device('cuda') if cuda else torch.device('cpu')
+LUTs = torch.load("%s/LUTs.pth" % opt.model_dir, map_location=map_loc)
 LUT0.load_state_dict(LUTs["0"])
 LUT1.load_state_dict(LUTs["1"])
 LUT2.load_state_dict(LUTs["2"])
@@ -57,7 +58,7 @@ LUT1.eval()
 LUT2.eval()
 #LUT3.eval()
 #LUT4.eval()
-classifier.load_state_dict(torch.load("%s/classifier.pth" % opt.model_dir))
+classifier.load_state_dict(torch.load("%s/classifier.pth" % opt.model_dir, map_location=map_loc))
 classifier.eval()
 
 
