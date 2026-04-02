@@ -6,7 +6,7 @@ from torch.autograd import Variable
 import torch
 import numpy as np
 import math
-from trilinear_c._ext import trilinear
+import trilinear
 
 def weights_init_normal_classifier(m):
     classname = m.__class__.__name__
@@ -266,7 +266,7 @@ class Generator3DLUT_identity(nn.Module):
                     self.LUT[0,i,j,k] = float(x[0])
                     self.LUT[1,i,j,k] = float(x[1])
                     self.LUT[2,i,j,k] = float(x[2])
-        self.LUT = nn.Parameter(torch.tensor(self.LUT))
+        self.LUT = nn.Parameter(self.LUT.detach().clone().requires_grad_(True))
         self.TrilinearInterpolation = TrilinearInterpolation()
 
     def forward(self, x):
@@ -279,62 +279,51 @@ class Generator3DLUT_zero(nn.Module):
         super(Generator3DLUT_zero, self).__init__()
 
         self.LUT = torch.zeros(3,dim,dim,dim, dtype=torch.float)
-        self.LUT = nn.Parameter(torch.tensor(self.LUT))
+        self.LUT = nn.Parameter(self.LUT.detach().clone().requires_grad_(True))
         self.TrilinearInterpolation = TrilinearInterpolation()
 
     def forward(self, x):
 
         return self.TrilinearInterpolation(self.LUT, x)
 
-class TrilinearInterpolation(torch.autograd.Function):
-
-    def forward(self, LUT, x):
-
+class TrilinearInterpolationFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, lut, x):
         x = x.contiguous()
         output = x.new(x.size())
-        dim = LUT.size()[-1]
+        dim = lut.size()[-1]
         shift = dim ** 3
-        binsize = 1.0001 / (dim-1)
+        binsize = 1.000001 / (dim - 1)
         W = x.size(2)
         H = x.size(3)
         batch = x.size(0)
 
-        self.x = x
-        self.LUT = LUT
-        self.dim = dim
-        self.shift = shift
-        self.binsize = binsize
-        self.W = W
-        self.H = H
-        self.batch = batch
+        assert 1 == trilinear.forward(lut, x, output, dim, shift, binsize, W, H, batch)
 
-        if x.is_cuda:
-            if batch == 1:
-                trilinear.trilinear_forward_cuda(LUT,x,output,dim,shift,binsize,W,H,batch)
-            elif batch > 1:
-                output = output.permute(1,0,2,3).contiguous()
-                trilinear.trilinear_forward_cuda(LUT,x.permute(1,0,2,3).contiguous(),output,dim,shift,binsize,W,H,batch)
-                output = output.permute(1,0,2,3).contiguous()
+        int_package = torch.IntTensor([dim, shift, W, H, batch])
+        float_package = torch.FloatTensor([binsize])
+        ctx.save_for_backward(lut, x, int_package, float_package)
 
-        else:
-            trilinear.trilinear_forward(LUT,x,output,dim,shift,binsize,W,H,batch)
+        return lut, output
 
+    @staticmethod
+    def backward(ctx, lut_grad, x_grad):
+        lut, x, int_package, float_package = ctx.saved_tensors
+        dim, shift, W, H, batch = int_package
+        dim, shift, W, H, batch = int(dim), int(shift), int(W), int(H), int(batch)
+        binsize = float(float_package[0])
+
+        assert 1 == trilinear.backward(x, x_grad, lut_grad, dim, shift, binsize, W, H, batch)
+        return lut_grad, x_grad
+
+
+class TrilinearInterpolation(torch.nn.Module):
+    def __init__(self):
+        super(TrilinearInterpolation, self).__init__()
+
+    def forward(self, lut, x):
+        _, output = TrilinearInterpolationFunction.apply(lut, x)
         return output
-
-    def backward(self, grad_x):
-
-        grad_LUT = torch.zeros(3,self.dim,self.dim,self.dim,dtype=torch.float)
-
-        if grad_x.is_cuda:
-            grad_LUT = grad_LUT.cuda()
-            if self.batch == 1:
-                trilinear.trilinear_backward_cuda(self.x,grad_x,grad_LUT,self.dim,self.shift,self.binsize,self.W,self.H,self.batch)
-            elif self.batch > 1:
-                trilinear.trilinear_backward_cuda(self.x.permute(1,0,2,3).contiguous(),grad_x.permute(1,0,2,3).contiguous(),grad_LUT,self.dim,self.shift,self.binsize,self.W,self.H,self.batch)
-        else:
-            trilinear.trilinear_backward(self.x,grad_x,grad_LUT,self.dim,self.shift,self.binsize,self.W,self.H,self.batch)
-
-        return grad_LUT, None
 
 
 class TV_3D(nn.Module):
