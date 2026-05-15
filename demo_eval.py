@@ -23,11 +23,8 @@ opt.image_path = opt.image_dir + '/' + opt.input_color_space + '/' + opt.image_n
 os.makedirs(opt.output_dir, exist_ok=True)
 
 # use gpu when detect cuda
-cuda = True if torch.cuda.is_available() else False
-# Tensor type
-Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-criterion_pixelwise = torch.nn.MSELoss()
 LUT0 = Generator3DLUT_identity()
 LUT1 = Generator3DLUT_zero()
 LUT2 = Generator3DLUT_zero()
@@ -36,17 +33,13 @@ LUT2 = Generator3DLUT_zero()
 classifier = Classifier()
 trilinear_ = TrilinearInterpolation() 
 
-if cuda:
-    LUT0 = LUT0.cuda()
-    LUT1 = LUT1.cuda()
-    LUT2 = LUT2.cuda()
-    #LUT3 = LUT3.cuda()
-    #LUT4 = LUT4.cuda()
-    classifier = classifier.cuda()
-    criterion_pixelwise.cuda()
+LUT0 = LUT0.to(device)
+LUT1 = LUT1.to(device)
+LUT2 = LUT2.to(device)
+classifier = classifier.to(device)
 
 # Load pretrained models
-map_loc = torch.device('cuda') if cuda else torch.device('cpu')
+map_loc = device
 LUTs = torch.load("%s/LUTs.pth" % opt.model_dir, map_location=map_loc)
 LUT0.load_state_dict(LUTs["0"])
 LUT1.load_state_dict(LUTs["1"])
@@ -76,12 +69,12 @@ def generate_LUT(img):
 # ----------
 # read image and transform to tensor
 if opt.input_color_space == 'sRGB':
-    img = Image.open(opt.image_path)
-    img = TF.to_tensor(img).type(Tensor)
+    img = Image.open(opt.image_path).convert('RGB')
+    img = TF.to_tensor(img).to(device)
 elif opt.input_color_space == 'XYZ':
     img = cv2.imread(opt.image_path, -1)
     img = np.array(img)
-    img = TF_x.to_tensor(img).type(Tensor)
+    img = TF_x.to_tensor(img).to(device)
 img = img.unsqueeze(0)
 
 LUT = generate_LUT(img)

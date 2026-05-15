@@ -12,7 +12,6 @@ from torchvision.utils import save_image
 
 from torch.utils.data import DataLoader
 from torchvision import datasets
-from torch.autograd import Variable
 import torch.autograd as autograd
 
 from models_x import *
@@ -39,14 +38,14 @@ parser.add_argument("--n_cpu", type=int, default=1, help="number of cpu threads 
 parser.add_argument("--n_critic", type=int, default=1, help="number of training steps for discriminator per iter")
 parser.add_argument("--output_dir", type=str, default="LUTs/unpaired/fiveK_480p_sm_1e-4_mn_10_pixel_1000", help="path to save model")
 parser.add_argument("--checkpoint_interval", type=int, default=1, help="interval between model checkpoints")
+parser.add_argument("--data_root", type=str, default="../data", help="root directory of datasets")
 opt = parser.parse_args()
 opt.output_dir = opt.output_dir + '_' + opt.input_color_space
 print(opt)
 
 os.makedirs("saved_models/%s" % opt.output_dir, exist_ok=True)
 
-cuda = True if torch.cuda.is_available() else False
-Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Loss functions
 criterion_GAN = torch.nn.MSELoss()
@@ -62,30 +61,27 @@ classifier = Classifier_unpaired()
 discriminator = Discriminator()
 TV3 = TV_3D()
 
-if cuda:
-    LUT0 = LUT0.cuda()
-    LUT1 = LUT1.cuda()
-    LUT2 = LUT2.cuda()
-    #LUT3 = LUT3.cuda()
-    #LUT4 = LUT4.cuda()
-    classifier = classifier.cuda()
-    criterion_GAN.cuda()
-    criterion_pixelwise.cuda()
-    discriminator = discriminator.cuda()
-    TV3.cuda()
-    TV3.weight_r = TV3.weight_r.type(Tensor)
-    TV3.weight_g = TV3.weight_g.type(Tensor)
-    TV3.weight_b = TV3.weight_b.type(Tensor)
+LUT0 = LUT0.to(device)
+LUT1 = LUT1.to(device)
+LUT2 = LUT2.to(device)
+classifier = classifier.to(device)
+criterion_GAN.to(device)
+criterion_pixelwise.to(device)
+discriminator = discriminator.to(device)
+TV3.to(device)
+TV3.weight_r = TV3.weight_r.to(device)
+TV3.weight_g = TV3.weight_g.to(device)
+TV3.weight_b = TV3.weight_b.to(device)
 
 if opt.epoch != 0:
     # Load pretrained models
-    LUTs = torch.load("saved_models/%s/LUTs_%d.pth" % (opt.output_dir, opt.epoch))
+    LUTs = torch.load("saved_models/%s/LUTs_%d.pth" % (opt.output_dir, opt.epoch), map_location=device)
     LUT0.load_state_dict(LUTs["0"])
     LUT1.load_state_dict(LUTs["1"])
     LUT2.load_state_dict(LUTs["2"])
     #LUT3.load_state_dict(LUTs["3"])
     #LUT4.load_state_dict(LUTs["4"])
-    classifier.load_state_dict(torch.load("saved_models/%s/classifier_%d.pth" % (opt.output_dir, opt.epoch)))
+    classifier.load_state_dict(torch.load("saved_models/%s/classifier_%d.pth" % (opt.output_dir, opt.epoch), map_location=device))
 else:
     # Initialize weights
     classifier.apply(weights_init_normal_classifier)
@@ -98,28 +94,28 @@ optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt
 
 if opt.input_color_space == 'sRGB':
     dataloader = DataLoader(
-        ImageDataset_sRGB_unpaired("../data/%s" % opt.dataset_name, mode="train"),
+        ImageDataset_sRGB_unpaired("%s/%s" % (opt.data_root, opt.dataset_name), mode="train"),
         batch_size=opt.batch_size,
         shuffle=True,
         num_workers=opt.n_cpu,
     )
 
     psnr_dataloader = DataLoader(
-        ImageDataset_sRGB_unpaired("../data/%s" % opt.dataset_name,  mode="test"),
+        ImageDataset_sRGB_unpaired("%s/%s" % (opt.data_root, opt.dataset_name),  mode="test"),
         batch_size=1,
         shuffle=False,
         num_workers=1,
     )
 elif opt.input_color_space == 'XYZ':
     dataloader = DataLoader(
-        ImageDataset_XYZ_unpaired("../data/%s" % opt.dataset_name, mode="train"),
+        ImageDataset_XYZ_unpaired("%s/%s" % (opt.data_root, opt.dataset_name), mode="train"),
         batch_size=opt.batch_size,
         shuffle=True,
         num_workers=opt.n_cpu,
     )
 
     psnr_dataloader = DataLoader(
-        ImageDataset_XYZ_unpaired("../data/%s" % opt.dataset_name,  mode="test"),
+        ImageDataset_XYZ_unpaired("%s/%s" % (opt.data_root, opt.dataset_name),  mode="test"),
         batch_size=1,
         shuffle=False,
         num_workers=1,
@@ -129,8 +125,8 @@ def calculate_psnr():
     classifier.eval()
     avg_psnr = 0
     for i, batch in enumerate(psnr_dataloader):
-        real_A = Variable(batch["A_input"].type(Tensor))
-        real_B = Variable(batch["A_exptC"].type(Tensor))
+        real_A = batch["A_input"].to(device)
+        real_B = batch["A_exptC"].to(device)
         fake_B, weights_norm = generator(real_A)
         fake_B = torch.round(fake_B*255)
         real_B = torch.round(real_B*255)
@@ -145,8 +141,8 @@ def visualize_result(epoch):
     """Saves a generated sample from the validation set"""
     os.makedirs("images/LUTs/" +str(epoch), exist_ok=True)
     for i, batch in enumerate(psnr_dataloader):
-        real_A = Variable(batch["A_input"].type(Tensor))
-        real_B = Variable(batch["A_exptC"].type(Tensor))
+        real_A = batch["A_input"].to(device)
+        real_B = batch["A_exptC"].to(device)
         img_name = batch["input_name"]
         fake_B, weights_norm = generator(real_A)
         img_sample = torch.cat((real_A.data, fake_B.data, real_B.data), -1)
@@ -160,11 +156,11 @@ def visualize_result(epoch):
 def compute_gradient_penalty(D, real_samples, fake_samples):
     """Calculates the gradient penalty loss for WGAN GP"""
     # Random weight term for interpolation between real and fake samples
-    alpha = Tensor(np.random.random((real_samples.size(0), 1, 1, 1)))
+    alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=real_samples.device)
     # Get random interpolation between real and fake samples
     interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
     d_interpolates = D(interpolates)
-    fake = Variable(Tensor(real_samples.shape[0], 1, 1, 1).fill_(1.0), requires_grad=False)
+    fake = torch.ones(real_samples.shape[0], 1, 1, 1, device=real_samples.device, requires_grad=False)
     # Get gradient w.r.t. interpolates
     gradients = autograd.grad(
         outputs=d_interpolates,
@@ -206,8 +202,8 @@ for epoch in range(opt.epoch, opt.n_epochs):
     for i, batch in enumerate(dataloader):
 
         # Model inputs
-        real_A = Variable(batch["A_input"].type(Tensor))
-        real_B = Variable(batch["B_exptC"].type(Tensor))
+        real_A = batch["A_input"].to(device)
+        real_B = batch["B_exptC"].to(device)
 
 
         # ---------------------
@@ -240,7 +236,7 @@ for epoch in range(opt.epoch, opt.n_epochs):
 
             fake_B, weights_norm = generator(real_A)
             pred_fake = discriminator(fake_B)
-            # Pixel-wise loss
+            # Pixel-wise loss (content preservation: output should not stray far from input)
             loss_pixel = criterion_pixelwise(fake_B, real_A)
 
             tv0, mn0 = TV3(LUT0)
@@ -303,9 +299,10 @@ for epoch in range(opt.epoch, opt.n_epochs):
 
     if epoch % opt.checkpoint_interval == 0:
         # Save model checkpoints
-        LUTs = {"0": LUT0.state_dict(), "1": LUT1.state_dict(), "2": LUT2.state_dict()} #, "3": LUT3.state_dict(), "4": LUT4.state_dict()
+        LUTs = {"0": LUT0.state_dict(), "1": LUT1.state_dict(), "2": LUT2.state_dict()}
         torch.save(LUTs, "saved_models/%s/LUTs_%d.pth" % (opt.output_dir, epoch))
         torch.save(classifier.state_dict(), "saved_models/%s/classifier_%d.pth" % (opt.output_dir, epoch))
-        file = open('saved_models/%s/result.txt' % opt.output_dir,'a')
-        file.write(" [PSNR: %f] [max PSNR: %f, epoch: %d]\n"% (avg_psnr, max_psnr, max_epoch))
-        file.close()
+        torch.save(optimizer_G.state_dict(), "saved_models/%s/optimizer_G_%d.pth" % (opt.output_dir, epoch))
+        torch.save(optimizer_D.state_dict(), "saved_models/%s/optimizer_D_%d.pth" % (opt.output_dir, epoch))
+        with open('saved_models/%s/result.txt' % opt.output_dir, 'a') as f:
+            f.write(" [PSNR: %f] [max PSNR: %f, epoch: %d]\n" % (avg_psnr, max_psnr, max_epoch))

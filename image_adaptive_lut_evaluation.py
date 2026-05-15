@@ -1,9 +1,9 @@
 import argparse
 import time
+import os
 import torch
 from torchvision.utils import save_image
 from torch.utils.data import DataLoader
-from torch.autograd import Variable
 
 from models import *
 from datasets import *
@@ -14,13 +14,12 @@ parser.add_argument("--epoch", type=int, default=145, help="epoch to load the sa
 parser.add_argument("--dataset_name", type=str, default="fiveK", help="name of the dataset")
 parser.add_argument("--input_color_space", type=str, default="sRGB", help="input color space: sRGB or XYZ")
 parser.add_argument("--model_dir", type=str, default="LUTs/paired/fiveK_480p_3LUT_sm_1e-4_mn_10", help="directory of saved models")
+parser.add_argument("--data_root", type=str, default="../data", help="root directory of datasets")
 opt = parser.parse_args()
 opt.model_dir = opt.model_dir + '_' + opt.input_color_space
 
 # use gpu when detect cuda
-cuda = True if torch.cuda.is_available() else False
-# Tensor type
-Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 criterion_pixelwise = torch.nn.MSELoss()
 LUT0 = Generator3DLUT_identity()
@@ -31,17 +30,14 @@ LUT2 = Generator3DLUT_zero()
 classifier = Classifier()
 trilinear_ = TrilinearInterpolation() 
 
-if cuda:
-    LUT0 = LUT0.cuda()
-    LUT1 = LUT1.cuda()
-    LUT2 = LUT2.cuda()
-    #LUT3 = LUT3.cuda()
-    #LUT4 = LUT4.cuda()
-    classifier = classifier.cuda()
-    criterion_pixelwise.cuda()
+LUT0 = LUT0.to(device)
+LUT1 = LUT1.to(device)
+LUT2 = LUT2.to(device)
+classifier = classifier.to(device)
+criterion_pixelwise.to(device)
 
 # Load pretrained models
-LUTs = torch.load("saved_models/%s/LUTs_%d.pth" % (opt.model_dir, opt.epoch))
+LUTs = torch.load("saved_models/%s/LUTs_%d.pth" % (opt.model_dir, opt.epoch), map_location=device)
 LUT0.load_state_dict(LUTs["0"])
 LUT1.load_state_dict(LUTs["1"])
 LUT2.load_state_dict(LUTs["2"])
@@ -52,19 +48,19 @@ LUT1.eval()
 LUT2.eval()
 #LUT3.eval()
 #LUT4.eval()
-classifier.load_state_dict(torch.load("saved_models/%s/classifier_%d.pth" % (opt.model_dir, opt.epoch)))
+classifier.load_state_dict(torch.load("saved_models/%s/classifier_%d.pth" % (opt.model_dir, opt.epoch), map_location=device))
 classifier.eval()
 
 if opt.input_color_space == 'sRGB':
     dataloader = DataLoader(
-        ImageDataset_sRGB("../data/%s" % opt.dataset_name,  mode="test"),
+        ImageDataset_sRGB("%s/%s" % (opt.data_root, opt.dataset_name),  mode="test"),
         batch_size=1,
         shuffle=False,
         num_workers=1,
     )
 elif opt.input_color_space == 'XYZ':
     dataloader = DataLoader(
-        ImageDataset_XYZ("../data/%s" % opt.dataset_name,  mode="test"),
+        ImageDataset_XYZ("%s/%s" % (opt.data_root, opt.dataset_name),  mode="test"),
         batch_size=1,
         shuffle=False,
         num_workers=1,
@@ -88,7 +84,7 @@ def visualize_result():
     out_dir = "images/%s_%d" % (opt.model_dir, opt.epoch)
     os.makedirs(out_dir, exist_ok=True)
     for i, batch in enumerate(dataloader):
-        real_A = Variable(batch["A_input"].type(Tensor))
+        real_A = batch["A_input"].to(device)
         img_name = batch["input_name"]
         fake_B = generator(real_A)
 
@@ -100,9 +96,8 @@ def visualize_result():
 def test_speed():
     t_list = []
     for i in range(1,10):
-        img_input = Image.open(os.path.join("../data/fiveK/input/JPG","original","a000%d.jpg"%i))
-        img_input = torch.unsqueeze(TF.to_tensor(TF.resize(img_input,(4000,6000))),0)
-        real_A = Variable(img_input.type(Tensor))
+        img_input = Image.open(os.path.join("%s/fiveK/input/JPG" % opt.data_root,"original","a000%d.jpg"%i))
+        real_A = torch.unsqueeze(TF.to_tensor(TF.resize(img_input,(4000,6000))),0).to(device)
         torch.cuda.synchronize()
         t0 = time.time()
         for j in range(0,100):
