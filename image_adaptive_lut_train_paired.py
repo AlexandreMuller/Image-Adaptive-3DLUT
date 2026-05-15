@@ -12,7 +12,6 @@ from torchvision.utils import save_image
 
 from torch.utils.data import DataLoader
 from torchvision import datasets
-from torch.autograd import Variable
 
 from models import *
 from datasets import *
@@ -35,6 +34,7 @@ parser.add_argument("--lambda_monotonicity", type=float, default=10.0, help="mon
 parser.add_argument("--n_cpu", type=int, default=1, help="number of cpu threads to use during batch generation")
 parser.add_argument("--checkpoint_interval", type=int, default=1, help="interval between model checkpoints")
 parser.add_argument("--output_dir", type=str, default="LUTs/paired/fiveK_480p_3LUT_sm_1e-4_mn_10", help="path to save model")
+parser.add_argument("--data_root", type=str, default="../data", help="root directory of datasets")
 opt = parser.parse_args()
 
 opt.output_dir = opt.output_dir + '_' + opt.input_color_space
@@ -42,9 +42,7 @@ print(opt)
 
 os.makedirs("saved_models/%s" % opt.output_dir, exist_ok=True)
 
-cuda = True if torch.cuda.is_available() else False
-# Tensor type
-Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Loss functions
 criterion_pixelwise = torch.nn.MSELoss()
@@ -60,27 +58,27 @@ TV3 = TV_3D()
 trilinear_ = TrilinearInterpolation() 
 
 if cuda:
-    LUT0 = LUT0.cuda()
-    LUT1 = LUT1.cuda()
-    LUT2 = LUT2.cuda()
-    #LUT3 = LUT3.cuda()
-    #LUT4 = LUT4.cuda()
-    classifier = classifier.cuda()
-    criterion_pixelwise.cuda()
-    TV3.cuda()
-    TV3.weight_r = TV3.weight_r.type(Tensor)
-    TV3.weight_g = TV3.weight_g.type(Tensor)
-    TV3.weight_b = TV3.weight_b.type(Tensor)
+    LUT0 = LUT0.to(device)
+    LUT1 = LUT1.to(device)
+    LUT2 = LUT2.to(device)
+    #LUT3 = LUT3.to(device)
+    #LUT4 = LUT4.to(device)
+    classifier = classifier.to(device)
+    criterion_pixelwise.to(device)
+    TV3.to(device)
+    TV3.weight_r = TV3.weight_r.to(device)
+    TV3.weight_g = TV3.weight_g.to(device)
+    TV3.weight_b = TV3.weight_b.to(device)
 
 if opt.epoch != 0:
     # Load pretrained models
-    LUTs = torch.load("saved_models/%s/LUTs_%d.pth" % (opt.output_dir, opt.epoch))
+    LUTs = torch.load("saved_models/%s/LUTs_%d.pth" % (opt.output_dir, opt.epoch), map_location=device)
     LUT0.load_state_dict(LUTs["0"])
     LUT1.load_state_dict(LUTs["1"])
     LUT2.load_state_dict(LUTs["2"])
     #LUT3.load_state_dict(LUTs["3"])
     #LUT4.load_state_dict(LUTs["4"])
-    classifier.load_state_dict(torch.load("saved_models/%s/classifier_%d.pth" % (opt.output_dir, opt.epoch)))
+    classifier.load_state_dict(torch.load("saved_models/%s/classifier_%d.pth" % (opt.output_dir, opt.epoch), map_location=device))
 else:
     # Initialize weights
     classifier.apply(weights_init_normal_classifier)
@@ -92,28 +90,28 @@ optimizer_G = torch.optim.Adam(itertools.chain(classifier.parameters(), LUT0.par
 
 if opt.input_color_space == 'sRGB':
     dataloader = DataLoader(
-        ImageDataset_sRGB("../data/%s" % opt.dataset_name, mode = "train"),
+        ImageDataset_sRGB("%s/%s" % (opt.data_root, opt.dataset_name), mode = "train"),
         batch_size=opt.batch_size,
         shuffle=True,
         num_workers=opt.n_cpu,
     )
 
     psnr_dataloader = DataLoader(
-        ImageDataset_sRGB("../data/%s" % opt.dataset_name,  mode="test"),
+        ImageDataset_sRGB("%s/%s" % (opt.data_root, opt.dataset_name),  mode="test"),
         batch_size=1,
         shuffle=False,
         num_workers=1,
     )
 elif opt.input_color_space == 'XYZ':
     dataloader = DataLoader(
-        ImageDataset_XYZ("../data/%s" % opt.dataset_name, mode = "train"),
+        ImageDataset_XYZ("%s/%s" % (opt.data_root, opt.dataset_name), mode = "train"),
         batch_size=opt.batch_size,
         shuffle=True,
         num_workers=opt.n_cpu,
     )
 
     psnr_dataloader = DataLoader(
-        ImageDataset_XYZ("../data/%s" % opt.dataset_name,  mode="test"),
+        ImageDataset_XYZ("%s/%s" % (opt.data_root, opt.dataset_name),  mode="test"),
         batch_size=1,
         shuffle=False,
         num_workers=1,
@@ -155,8 +153,8 @@ def calculate_psnr():
     classifier.eval()
     avg_psnr = 0
     for i, batch in enumerate(psnr_dataloader):
-        real_A = Variable(batch["A_input"].type(Tensor))
-        real_B = Variable(batch["A_exptC"].type(Tensor))
+        real_A = batch["A_input"].to(device)
+        real_B = batch["A_exptC"].to(device)
         fake_B, weights_norm = generator_eval(real_A)
         fake_B = torch.round(fake_B*255)
         real_B = torch.round(real_B*255)
@@ -172,8 +170,8 @@ def visualize_result(epoch):
     classifier.eval()
     os.makedirs("images/%s/" % opt.output_dir +str(epoch), exist_ok=True)
     for i, batch in enumerate(psnr_dataloader):
-        real_A = Variable(batch["A_input"].type(Tensor))
-        real_B = Variable(batch["A_exptC"].type(Tensor))
+        real_A = batch["A_input"].to(device)
+        real_B = batch["A_exptC"].to(device)
         img_name = batch["input_name"]
         fake_B, weights_norm = generator_eval(real_A)
         img_sample = torch.cat((real_A.data, fake_B.data, real_B.data), -1)
@@ -197,8 +195,8 @@ for epoch in range(opt.epoch, opt.n_epochs):
     for i, batch in enumerate(dataloader):
 
         # Model inputs
-        real_A = Variable(batch["A_input"].type(Tensor))
-        real_B = Variable(batch["A_exptC"].type(Tensor))
+        real_A = batch["A_input"].to(device)
+        real_B = batch["A_exptC"].to(device)
 
         # ------------------
         #  Train Generators
@@ -261,8 +259,8 @@ for epoch in range(opt.epoch, opt.n_epochs):
         LUTs = {"0": LUT0.state_dict(),"1": LUT1.state_dict(),"2": LUT2.state_dict()} #,"3": LUT3.state_dict(),"4": LUT4.state_dict()
         torch.save(LUTs, "saved_models/%s/LUTs_%d.pth" % (opt.output_dir, epoch))
         torch.save(classifier.state_dict(), "saved_models/%s/classifier_%d.pth" % (opt.output_dir, epoch))
-        file = open('saved_models/%s/result.txt' % opt.output_dir,'a')
-        file.write(" [PSNR: %f] [max PSNR: %f, epoch: %d]\n"% (avg_psnr, max_psnr, max_epoch))
-        file.close()
+        torch.save(optimizer_G.state_dict(), "saved_models/%s/optimizer_G_%d.pth" % (opt.output_dir, epoch))
+        with open('saved_models/%s/result.txt' % opt.output_dir, 'a') as f:
+            f.write(" [PSNR: %f] [max PSNR: %f, epoch: %d]\n" % (avg_psnr, max_psnr, max_epoch))
 
 

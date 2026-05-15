@@ -2,10 +2,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms as transforms
-from torch.autograd import Variable
 import torch
 import numpy as np
 import math
+import os
 import trilinear
 
 def weights_init_normal_classifier(m):
@@ -23,7 +23,7 @@ class resnet18_224(nn.Module):
         super(resnet18_224, self).__init__()
 
         self.aug_test = aug_test
-        net = models.resnet18(pretrained=True)
+        net = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         # self.mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).cuda()
         # self.std = torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).cuda()
 
@@ -251,11 +251,15 @@ class Classifier_unpaired(nn.Module):
 class Generator3DLUT_identity(nn.Module):
     def __init__(self, dim=33):
         super(Generator3DLUT_identity, self).__init__()
+        _here = os.path.dirname(os.path.abspath(__file__))
         if dim == 33:
-            file = open("IdentityLUT33.txt",'r')
+            lut_path = os.path.join(_here, "IdentityLUT33.txt")
         elif dim == 64:
-            file = open("IdentityLUT64.txt",'r')
-        LUT = file.readlines()
+            lut_path = os.path.join(_here, "IdentityLUT64.txt")
+        else:
+            raise ValueError(f"No identity LUT file for dim={dim}")
+        with open(lut_path, 'r') as file:
+            LUT = file.readlines()
         self.LUT = torch.zeros(3,dim,dim,dim, dtype=torch.float)
 
         for i in range(0,dim):
